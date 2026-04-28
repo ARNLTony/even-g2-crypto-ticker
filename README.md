@@ -1,3 +1,5 @@
+<img src="docs/icon.png" alt="Crypto Ticker icon" width="96" align="right" />
+
 # Crypto Ticker — Even Realities G2
 
 Live cryptocurrency prices and charts for the Even G2 smart glasses, built as an Even Hub web app.
