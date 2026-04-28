@@ -141,6 +141,19 @@ This app has been validated **only in the simulator**. Open questions for real G
 - **Sideload:** `evenhub login` then `evenhub pack app.json dist` produces a `.ehpk`. Upload via the developer portal to flash to your own G2.
 - **Publish:** application-based via the Even Hub Early Developer Program (`https://hub.evenrealities.com`). Revenue share / publishing fees not publicly disclosed.
 
+## Data sources
+
+All market data comes from **[Binance](https://www.binance.com/)** public APIs (no key required, no auth):
+
+| What | Endpoint | Why |
+|---|---|---|
+| Live ticker prices + 24h change | WebSocket `wss://stream.binance.com:9443/stream?streams=...@ticker` | Sub-second updates pushed for every selected pair |
+| Historical klines (chart) | REST `GET https://api.binance.com/api/v3/klines` | Closing prices over the selected time range (24h / 1W / 1M / 1Y / ALL) |
+
+The app whitelists only these two Binance endpoints in `app.json`'s `network` permission. No personal data is sent. No analytics, no telemetry.
+
+Binance is the trademark of Binance Holdings Ltd. This project is an unofficial third-party client that reads public price data; it has no affiliation with or endorsement from Binance.
+
 ## Resources
 
 - Even Hub docs: https://hub.evenrealities.com/docs
@@ -149,6 +162,7 @@ This app has been validated **only in the simulator**. Open questions for real G
 - CLI: `@evenrealities/evenhub-cli`
 - Discord: https://discord.gg/GsuDkKDXDe
 - Even Realities GitHub: https://github.com/even-realities
+- Binance API docs: https://developers.binance.com/docs/binance-spot-api-docs
 
 ## Known issues
 
