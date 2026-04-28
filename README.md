@@ -4,6 +4,13 @@ Live cryptocurrency prices and charts for the Even G2 smart glasses, built as an
 
 The app runs as HTML/JS inside the Even Realities companion app's WebView. The phone-side UI is a settings/picker screen. The glass-side UI is a list of selected coins with live Binance WebSocket prices and a tappable detail page that includes a 1D/1W/1M/1Y line chart fetched from Binance REST klines.
 
+## Screenshots
+
+| Glasses — list | Glasses — detail | Companion app |
+|:--:|:--:|:--:|
+| ![List view](docs/Splash.png) | ![Detail view](docs/Details.png) | ![Companion picker](docs/Companion.png) |
+| 9 live coins, currency footer | Chart with axes + range tabs | Currency dropdown + watchlist editor |
+
 ## Quick start
 
 Two terminals.
