@@ -169,3 +169,8 @@ Binance is the trademark of Binance Holdings Ltd. This project is an unofficial 
 - Visual scroll glitch when moving cursor in list mode (LVGL redraw artifact, deferred)
 - Simulator does not visually preview image containers identically to hardware; chart appearance on real G2 unknown
 - Long coin names (e.g. "Ethereum Classic") may overflow the info container's first line in detail mode and wrap
+
+## License & privacy
+
+- License: [MIT](LICENSE)
+- Privacy policy: [docs/PRIVACY.md](docs/PRIVACY.md) — no personal data collected; only public Binance APIs are contacted
