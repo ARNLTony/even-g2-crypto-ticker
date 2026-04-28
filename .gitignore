@@ -26,6 +26,11 @@ pnpm-debug.log*
 # Even Hub packaged output
 *.ehpk
 
+# TypeScript build artifacts (tsc -b emit)
+src/*.js
+src/**/*.js
+*.tsbuildinfo
+
 # Simulator screenshots
 glasses_*.png
 webview_*.png
