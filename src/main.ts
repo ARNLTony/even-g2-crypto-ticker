@@ -51,10 +51,10 @@ const COL_PRICE_X = 96;
 const COL_PRICE_W = 160;
 const COL_CHANGE_X = 256;
 const COL_CHANGE_W = SCREEN_W - COL_CHANGE_X;
-const COL_LIST_H = 268;
+const COL_LIST_H = 256;
 
 const FOOTER_IMG_W = 288;
-const FOOTER_IMG_H = 20;
+const FOOTER_IMG_H = 28;
 const FOOTER_IMG_X = Math.floor((SCREEN_W - FOOTER_IMG_W) / 2);
 const FOOTER_IMG_Y = SCREEN_H - FOOTER_IMG_H;
 
@@ -237,7 +237,7 @@ async function renderFooterImage(text: string): Promise<Uint8Array> {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, FOOTER_IMG_W, FOOTER_IMG_H);
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 14px sans-serif";
+  ctx.font = "bold 16px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, FOOTER_IMG_W / 2, FOOTER_IMG_H / 2);
