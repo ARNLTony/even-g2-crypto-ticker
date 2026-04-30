@@ -237,7 +237,7 @@ async function renderFooterImage(text: string): Promise<Uint8Array> {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, FOOTER_IMG_W, FOOTER_IMG_H);
   ctx.fillStyle = "#ffffff";
-  ctx.font = "11px sans-serif";
+  ctx.font = "bold 14px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, FOOTER_IMG_W / 2, FOOTER_IMG_H / 2);
