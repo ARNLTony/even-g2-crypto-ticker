@@ -1,35 +1,19 @@
 import type { Kline } from "./binance";
-import { formatPrice } from "./format";
 
 export type ChartRange = "24h" | "1W" | "1M" | "1Y" | "ALL";
-
-const RANGE_LABEL: Record<ChartRange, string> = {
-  "24h": "-24h",
-  "1W": "-7d",
-  "1M": "-30d",
-  "1Y": "-1y",
-  "ALL": "ALL",
-};
-
-function leftAxisLabel(range: ChartRange, klines: Kline[]): string {
-  if (range === "ALL" && klines.length > 0) {
-    return String(new Date(klines[0].openTime).getFullYear());
-  }
-  return RANGE_LABEL[range];
-}
 
 export type ChartHalves = {
   left: Uint8Array;
   right: Uint8Array;
 };
 
+// Draws a price-line trend chart. NO text is rendered into the canvas — all
+// labels are displayed via LVGL text containers in main.ts so they match the
+// embedded firmware font of the rest of the UI.
 export async function renderChartHalves(
   klines: Kline[],
-  range: ChartRange,
   totalWidth: number,
-  height: number,
-  locale: string,
-  quoteLabel: string
+  height: number
 ): Promise<ChartHalves> {
   const halfWidth = Math.floor(totalWidth / 2);
   const canvas = document.createElement("canvas");
@@ -40,21 +24,23 @@ export async function renderChartHalves(
     return { left: new Uint8Array(0), right: new Uint8Array(0) };
   }
 
-  drawChart(ctx, klines, range, totalWidth, height, locale, quoteLabel);
+  drawChart(ctx, klines, totalWidth, height);
 
   const left = await sliceToPng(canvas, 0, halfWidth, height);
   const right = await sliceToPng(canvas, halfWidth, halfWidth, height);
   return { left, right };
 }
 
+// The Y-axis labels live in their own 100px strip OUTSIDE this canvas
+// (placed by main.ts as LVGL text containers in the gap between the
+// right chart image and the screen edge). So the canvas itself uses its
+// full width for the plot — no internal gutter needed.
+
 function drawChart(
   ctx: CanvasRenderingContext2D,
   klines: Kline[],
-  range: ChartRange,
   width: number,
-  height: number,
-  locale: string,
-  quoteLabel: string
+  height: number
 ) {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
@@ -71,18 +57,17 @@ function drawChart(
     max = min === 0 ? 1 : min * 1.001;
   }
 
-  const RIGHT_LABEL_W = 180;
-  const X_LABEL_H = 20;
   const PAD = 8;
-
   const plotX = PAD;
   const plotY = PAD;
-  const plotW = width - RIGHT_LABEL_W - PAD;
-  const plotH = height - X_LABEL_H - PAD * 2;
+  const plotW = width - PAD * 2;
+  const plotH = height - PAD * 2;
 
-  ctx.strokeStyle = "#444";
+  // Dashed L-frame: right axis + bottom axis. No text — Y-axis labels
+  // are LVGL text containers placed in the right gutter.
+  ctx.strokeStyle = "#888";
   ctx.lineWidth = 1;
-  ctx.setLineDash([2, 3]);
+  ctx.setLineDash([3, 3]);
   ctx.beginPath();
   ctx.moveTo(plotX + plotW, plotY);
   ctx.lineTo(plotX + plotW, plotY + plotH);
@@ -90,6 +75,7 @@ function drawChart(
   ctx.stroke();
   ctx.setLineDash([]);
 
+  // Price line.
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
@@ -102,31 +88,6 @@ function drawChart(
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
-
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "18px sans-serif";
-
-  ctx.textBaseline = "top";
-  ctx.textAlign = "left";
-  ctx.fillText(
-    `${formatPrice(max, locale)} ${quoteLabel}`,
-    plotX + plotW + 4,
-    plotY + 2
-  );
-
-  ctx.textBaseline = "bottom";
-  ctx.fillText(
-    `${formatPrice(min, locale)} ${quoteLabel}`,
-    plotX + plotW + 4,
-    plotY + plotH
-  );
-
-  ctx.textBaseline = "top";
-  ctx.textAlign = "left";
-  ctx.fillText(leftAxisLabel(range, klines), plotX, plotY + plotH + 4);
-
-  ctx.textAlign = "right";
-  ctx.fillText("now", plotX + plotW, plotY + plotH + 4);
 }
 
 async function sliceToPng(

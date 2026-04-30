@@ -21,6 +21,26 @@ export function formatPrice(
   return `${symbol}${num}`;
 }
 
+// Axis variant: drops cents for prices >= 1000 to keep big-cap labels short
+// enough to avoid LVGL scroll indicators in the narrow Y-axis gutter. Small-
+// cap (< $1) coins keep full adaptive precision so they stay readable.
+export function formatPriceAxis(
+  price: number,
+  locale: string,
+  symbol = ""
+): string {
+  let digits: number;
+  if (price >= 1000) digits = 0;
+  else if (price >= 1) digits = 2;
+  else if (price >= 0.01) digits = 4;
+  else digits = 6;
+  const num = price.toLocaleString(locale, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+  return `${symbol}${num}`;
+}
+
 function padPrice(str: string): string {
   return str.padStart(PRICE_CELL_WIDTH, " ");
 }

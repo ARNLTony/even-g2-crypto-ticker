@@ -27,6 +27,7 @@ import {
 import { fetchKlines, subscribeTicker, type Kline, type Tick } from "./binance";
 import {
   formatPrice,
+  formatPriceAxis,
   liveCells,
   loadingCells,
   noDataCells,
@@ -54,10 +55,13 @@ const COL_CHANGE_W = SCREEN_W - COL_CHANGE_X;
 const COL_LIST_H = 256;
 
 // Footer is now a text container (uses the LVGL embedded font, matches the
-// crypto rows). Single LVGL line is ~30 px tall.
-const FOOTER_X = 0;
+// crypto rows). Single LVGL line is ~30 px tall. Container is narrower than
+// the screen and geometrically centered so the text reads centered without
+// padding the content with leading spaces (which made LVGL think the label
+// overflows and showed a scroll indicator).
+const FOOTER_W = 480;
+const FOOTER_X = Math.floor((SCREEN_W - FOOTER_W) / 2);
 const FOOTER_Y = 258;
-const FOOTER_W = SCREEN_W;
 const FOOTER_H = 30;
 
 const CID_SYMBOL = 1;
@@ -70,6 +74,10 @@ const CID_DETAIL_INFO = 1;
 const CID_DETAIL_TABS = 2;
 const CID_DETAIL_CHART_LEFT = 3;
 const CID_DETAIL_CHART_RIGHT = 4;
+const CID_DETAIL_YMAX = 5;
+const CID_DETAIL_YMIN = 6;
+const CID_DETAIL_XLEFT = 7;
+const CID_DETAIL_XRIGHT = 8;
 
 const INFO_X = 0;
 const INFO_Y = 0;
@@ -81,10 +89,31 @@ const TABS_Y = 0;
 const TABS_W = 180;
 const TABS_H = 144;
 
-const CHART_HALF_W = 288;
-const CHART_TOTAL_W = CHART_HALF_W * 2;
-const CHART_H = 144;
+// Two chart image halves sit side-by-side starting at x=0. The right
+// 100px strip of the screen is left uncovered for LVGL Y-axis labels —
+// LVGL text rendered behind an image container is hidden by the image,
+// so the labels MUST live outside any image's bounds. A 30px row is
+// also reserved BELOW the chart for X-axis labels.
+const AXIS_LBL_W = 176;
+const AXIS_LBL_H = 30;
+const CHART_TOTAL_W = SCREEN_W - AXIS_LBL_W; // 400
+const CHART_HALF_W = CHART_TOTAL_W / 2;       // 200
+const CHART_H = 114;                          // 144 - 30 (x-axis row below)
 const CHART_Y = 144;
+const AXIS_LBL_X = CHART_TOTAL_W;
+const AXIS_LBL_TOP_Y = CHART_Y;
+const AXIS_LBL_BOT_Y = CHART_Y + CHART_H - AXIS_LBL_H;
+const X_AXIS_Y = CHART_Y + CHART_H;           // 258
+const X_AXIS_H = AXIS_LBL_H;                  // 30
+const X_LEFT_X = 4;
+const X_LEFT_W = 160;
+// "now" should end right under the chart's vertical right axis. The axis lives
+// at canvas x = CHART_TOTAL_W - 8 (chart.ts uses PAD=8). LVGL is left-aligned
+// only, so we position the container so its content starts at axis - text width.
+const NOW_TEXT_W = 50;             // measured visually for the LVGL embedded font
+const CHART_RIGHT_AXIS_X = CHART_TOTAL_W - 8;
+const X_RIGHT_X = CHART_RIGHT_AXIS_X - NOW_TEXT_W;
+const X_RIGHT_W = NOW_TEXT_W;
 
 type Range = "24h" | "1W" | "1M" | "1Y" | "ALL";
 const RANGES: Range[] = ["24h", "1W", "1M", "1Y", "ALL"];
@@ -107,6 +136,17 @@ function periodSuffix(range: Range, klines: Kline[] | null): string {
   return "all";
 }
 
+function xAxisLeftLabel(range: Range, klines: Kline[] | null): string {
+  if (range === "24h") return "-24h";
+  if (range === "1W") return "-7d";
+  if (range === "1M") return "-30d";
+  if (range === "1Y") return "-1y";
+  if (klines && klines.length > 0) {
+    return `${new Date(klines[0].openTime).getFullYear()}`;
+  }
+  return "";
+}
+
 type Mode = "list" | "detail";
 type Cached = { tick: Tick; ts: number };
 
@@ -127,6 +167,9 @@ let lastSymbolText = "";
 let lastPriceText = "";
 let lastChangeText = "";
 let lastDetailInfoText = "";
+let lastYMaxText = "";
+let lastYMinText = "";
+let lastXLeftText = "";
 let lastDetailTabsText = "";
 let renderQueued = false;
 
@@ -215,7 +258,7 @@ function columnContainers(symbols: string[]): {
       width: FOOTER_W,
       height: FOOTER_H,
       borderWidth: 0,
-      paddingLength: PADDING,
+      paddingLength: 0,
       containerID: CID_LIST_FOOTER,
       containerName: "list_footer",
       isEventCapture: 0,
@@ -227,10 +270,7 @@ function columnContainers(symbols: string[]): {
 }
 
 function footerText(): string {
-  const text = `${QUOTE_LABEL[quote]} ${QUOTE_NAME[quote]}  ·  Data from Binance`;
-  const TARGET = 56;
-  const pad = Math.max(0, Math.floor((TARGET - text.length) / 2));
-  return " ".repeat(pad) + text;
+  return `${QUOTE_LABEL[quote]} ${QUOTE_NAME[quote]}  ·  Data from Binance`;
 }
 
 function detailInfoText(
@@ -249,12 +289,13 @@ function detailInfoText(
   const name =
     rawName.length > NAME_MAX ? rawName.slice(0, NAME_MAX - 1) + "…" : rawName;
   const entry = latest.get(symbol);
+  const currencyLabel = QUOTE_LABEL[quote];
 
   let line1: string;
   if (entry) {
     const stale = now - entry.ts > STALE_THRESHOLD_MS;
     const price = formatPrice(entry.tick.price, locale, currencySymbol);
-    line1 = `${symbol} ${name}  ${price}${stale ? " (stale)" : ""}`;
+    line1 = `${symbol} ${name}  ${price} ${currencyLabel}${stale ? " (stale)" : ""}`;
   } else {
     line1 = `${symbol} ${name}`;
   }
@@ -289,8 +330,8 @@ function detailInfoText(
       if (k.high > high) high = k.high;
       if (k.low < low) low = k.low;
     }
-    line3 = `H: ${formatPrice(high, locale, currencySymbol)}`;
-    line4 = `L: ${formatPrice(low, locale, currencySymbol)}`;
+    line3 = `H: ${formatPrice(high, locale, currencySymbol)} ${currencyLabel}`;
+    line4 = `L: ${formatPrice(low, locale, currencySymbol)} ${currencyLabel}`;
   } else {
     line3 = "H: ...";
     line4 = "L: ...";
@@ -346,6 +387,54 @@ function detailContainers(
       containerName: "tabs",
       isEventCapture: 1,
       content: tabsVertical(range),
+    }),
+    new TextContainerProperty({
+      xPosition: AXIS_LBL_X,
+      yPosition: AXIS_LBL_TOP_Y,
+      width: AXIS_LBL_W,
+      height: AXIS_LBL_H,
+      borderWidth: 0,
+      paddingLength: 0,
+      containerID: CID_DETAIL_YMAX,
+      containerName: "ymax",
+      isEventCapture: 0,
+      content: "",
+    }),
+    new TextContainerProperty({
+      xPosition: AXIS_LBL_X,
+      yPosition: AXIS_LBL_BOT_Y,
+      width: AXIS_LBL_W,
+      height: AXIS_LBL_H,
+      borderWidth: 0,
+      paddingLength: 0,
+      containerID: CID_DETAIL_YMIN,
+      containerName: "ymin",
+      isEventCapture: 0,
+      content: "",
+    }),
+    new TextContainerProperty({
+      xPosition: X_LEFT_X,
+      yPosition: X_AXIS_Y,
+      width: X_LEFT_W,
+      height: X_AXIS_H,
+      borderWidth: 0,
+      paddingLength: 0,
+      containerID: CID_DETAIL_XLEFT,
+      containerName: "xleft",
+      isEventCapture: 0,
+      content: xAxisLeftLabel(range, currentKlines),
+    }),
+    new TextContainerProperty({
+      xPosition: X_RIGHT_X,
+      yPosition: X_AXIS_Y,
+      width: X_RIGHT_W,
+      height: X_AXIS_H,
+      borderWidth: 0,
+      paddingLength: 0,
+      containerID: CID_DETAIL_XRIGHT,
+      containerName: "xright",
+      isEventCapture: 0,
+      content: "now",
     }),
   ];
 
@@ -489,18 +578,53 @@ function moveSelection(delta: number) {
   pushSymbolColumn();
 }
 
+async function pushAxisLabels(klines: Kline[]) {
+  if (!bridge || !bridgeReady || mode !== "detail") return;
+  let ymax = "";
+  let ymin = "";
+  if (klines.length >= 2) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const k of klines) {
+      if (k.close < lo) lo = k.close;
+      if (k.close > hi) hi = k.close;
+    }
+    const locale = QUOTE_LOCALE[quote];
+    const sym = QUOTE_SYMBOL[quote];
+    const label = QUOTE_LABEL[quote];
+    ymax = `${formatPriceAxis(hi, locale, sym)} ${label}`;
+    ymin = `${formatPriceAxis(lo, locale, sym)} ${label}`;
+  }
+  const xleft = xAxisLeftLabel(detailRange, klines.length > 0 ? klines : null);
+  if (ymax !== lastYMaxText) {
+    lastYMaxText = ymax;
+    await bridge.textContainerUpgrade(
+      new TextContainerUpgrade({ containerID: CID_DETAIL_YMAX, content: ymax })
+    );
+  }
+  if (ymin !== lastYMinText) {
+    lastYMinText = ymin;
+    await bridge.textContainerUpgrade(
+      new TextContainerUpgrade({ containerID: CID_DETAIL_YMIN, content: ymin })
+    );
+  }
+  if (xleft !== lastXLeftText) {
+    lastXLeftText = xleft;
+    await bridge.textContainerUpgrade(
+      new TextContainerUpgrade({ containerID: CID_DETAIL_XLEFT, content: xleft })
+    );
+  }
+}
+
 async function pushChart(klines: Kline[]) {
   if (!bridge || !bridgeReady || mode !== "detail") return;
   try {
-    const locale = QUOTE_LOCALE[quote];
     const { left, right } = await renderChartHalves(
       klines,
-      detailRange,
       CHART_TOTAL_W,
-      CHART_H,
-      locale,
-      QUOTE_LABEL[quote]
+      CHART_H
     );
+    await pushAxisLabels(klines);
     await queueImagePush(() =>
       bridge!.updateImageRawData(
         new ImageRawDataUpdate({
@@ -602,6 +726,11 @@ async function enterDetail() {
   mode = "detail";
   detailRange = "24h";
   currentKlines = null;
+  lastDetailInfoText = "";
+  lastDetailTabsText = "";
+  lastYMaxText = "";
+  lastYMinText = "";
+  lastXLeftText = "";
   await rebuildDetail();
 }
 
@@ -612,6 +741,9 @@ async function exitDetail() {
   currentKlines = null;
   lastDetailInfoText = "";
   lastDetailTabsText = "";
+  lastYMaxText = "";
+  lastYMinText = "";
+  lastXLeftText = "";
   await rebuildGlass(watchlist);
 }
 
