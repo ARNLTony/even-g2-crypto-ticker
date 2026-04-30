@@ -710,6 +710,15 @@ function handleGlassEvent(event: EvenHubEvent) {
           console.error("enterDetail failed:", err)
         );
         break;
+      case OsEventTypeList.DOUBLE_CLICK_EVENT:
+        // Root-page exit per Even Hub UX guidelines:
+        // shutDownPageContainer(1) shows the host's exit-confirm dialog.
+        bridge
+          ?.shutDownPageContainer(1)
+          .catch((err) =>
+            console.error("shutDownPageContainer failed:", err)
+          );
+        break;
     }
     return;
   }

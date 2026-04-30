@@ -35,11 +35,12 @@ To open DevTools in the Browser pane: right-click → Inspect, or F12.
 
 ## Glass-side UX
 
-**List mode (default):**
+**List mode (default — root page):**
 | Action | Effect |
 |---|---|
-| `Up` / `Down` | Move `>` cursor through the 8 coins |
-| `Double Click` | Enter detail view for selected coin |
+| `Up` / `Down` | Move `「 」` cursor through the watchlist |
+| `Click` | Enter detail view for selected coin |
+| `Double Click` | Show host exit-confirm dialog (`shutDownPageContainer(1)`) — closes the app |
 
 **Detail mode:**
 | Action | Effect |
