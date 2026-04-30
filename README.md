@@ -11,7 +11,7 @@ The app runs as HTML/JS inside the Even Realities companion app's WebView. The p
 | Glasses — list | Glasses — detail | Companion app |
 |:--:|:--:|:--:|
 | ![List view](docs/Splash.png) | ![Detail view](docs/Details.png) | ![Companion picker](docs/Companion.png) |
-| 9 live coins, currency footer | Chart with axes + range tabs | Currency dropdown + watchlist editor |
+| 9 live coins + centered currency footer | Chart, dashed axes, LVGL Y/X labels, range tabs | Currency dropdown + watchlist editor |
 
 ## Quick start
 
@@ -45,7 +45,7 @@ To open DevTools in the Browser pane: right-click → Inspect, or F12.
 **Detail mode:**
 | Action | Effect |
 |---|---|
-| `Up` / `Down` | Cycle range tabs `[1D]` → `[1W]` → `[1M]` → `[1Y]` |
+| `Up` / `Down` | Cycle range tabs `[24h]` → `[1W]` → `[1M]` → `[1Y]` → `[ALL]` |
 | `Click` | Advance to the next range (mirrors typical G2 single-tap convention) |
 | `Double Click` | Return to list |
 
@@ -53,43 +53,51 @@ To open DevTools in the Browser pane: right-click → Inspect, or F12.
 
 ## Phone-side picker (Browser pane)
 
-- **Currency toggle:** `USD` (uses Binance USDT pairs, en-US formatting) or `EUR` (uses native Binance EUR pairs, de-DE formatting)
+- **Currency dropdown:** 7 fiats (`USD`, `EUR`, `ARS`, `JPY`, `TRY`, `BRL`, `PLN`) + 3 stablecoins (`USDT`, `USDC`, `FDUSD`). USD is a display alias for Binance USDT pairs (no native USD spot pair on Binance). Each quote uses the matching number locale (e.g. `de-DE` for EUR, `ja-JP` for JPY).
 - **Watchlist:** up to 9 of 30 catalog coins; reorder with ↑/↓ buttons; drop with ×; add unselected with `+`
 - Settings persist in `window.localStorage` under `ticker.watchlist` and `ticker.quote`
 
 ## Architecture
 
-### Container layout — list mode (3 text containers)
+### Container layout — list mode (4 text containers)
 
 ```
-┌─────────────────────────────────────────────┐
-│ > BTC      76,200      ▼ 2.10%              │
-│   ETH       2,275      ▼ 1.97%              │
-│   ...                                       │
-└─────────────────────────────────────────────┘
-  x=0..96    x=96..236   x=236..576
-  symbols    prices      changes
+┌─────────────────────────────────────────────┐  y=0
+│ 「BTC」    76,200      ▼ 2.10%              │
+│  ETH       2,275      ▼ 1.97%               │
+│  ...                                        │
+├─────────────────────────────────────────────┤  y=256
+│       USD US Dollar · Data from Binance     │  footer (LVGL, centered)
+└─────────────────────────────────────────────┘  y=288
+  x=0..96    x=96..256   x=256..576
+  symbols    prices      changes               x=48..528 (centered)
 ```
 
-Columns align by absolute container x-position. The cursor `>` is part of the symbol column's content, redrawn on scroll.
+Columns align by absolute container x-position. The cursor highlight `「 」` wraps the selected symbol in the symbol column's content, redrawn on scroll. The footer container is geometrically centered (480 px wide at x=48); fake-centering with leading spaces caused LVGL to flag overflow with a scroll indicator.
 
-### Container layout — detail mode (2 text + 1 image)
+### Container layout — detail mode (6 text + 2 image, max 8)
 
 ```
-┌──────────────────────────┬──────────────────┐
-│ BTC Bitcoin  76,308      │                  │
-│ ▼ 2.05% 24h              │   /\   /\        │  Y-max  77,815
-│ H 78,265                 │  /  \_/  \_      │
-│ L 75,925                 │              \   │  Y-min  76,229
-│                          │                  │
-│ [1D]                     │  -24h        now │
-│  1W                      │                  │
-│  1M                      │                  │
-│  1Y                      │                  │
-└──────────────────────────┴──────────────────┘
-  x=0..280  info+stats     x=288..576  chart image (288×144 PNG)
-  x=0..96   tabs (vertical, isEventCapture=1)
+┌──────────────────────────┬──────────────────┐  y=0
+│ BTC Bitcoin  76,308 USD  │   「24h」        │
+│ ▼ 2.05% 24h              │    1W            │
+│ H: 78,265.00 USD         │    1M            │  info + tabs
+│ L: 75,925.00 USD         │    1Y            │  (LVGL text)
+│                          │    ALL           │
+├──────────────────────────┴──────────────┬───┤  y=144
+│  /\           ┊                         │77,│
+│ /  \      /\  ┊                         │815│  Y-max (LVGL)
+│     \    /  \_┊                         │USD│
+│      \__/     ┊                         │76,│  Y-min (LVGL)
+│ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘                         │229│
+│                                         │USD│
+├─ -24h ────────────────────────── now ───┴───┤  y=258
+└─────────────────────────────────────────────┘  y=288
+  x=0..200 chart-L  x=200..400 chart-R  x=400..576 Y-axis labels
+                                        (LVGL text in 176-px gutter)
 ```
+
+The chart canvas is split into two 200×114 image halves so each fits under the firmware's 288-px image-container width cap. All Y-axis values, period labels (`-24h`, `now`), and tabs are LVGL text containers — the chart canvas paints only the price line and the dashed L-frame axis.
 
 ### Data flow
 
@@ -105,8 +113,8 @@ Binance REST  ─── klines ─►  pushChart ─► canvas ─► PNG ─►
 
 - `mode: "list" | "detail"` — drives event routing and which containers exist
 - `selectedIndex` — current cursor row in list / current coin in detail
-- `detailRange: "1D" | "1W" | "1M" | "1Y"` — current tab, drives klines fetch
-- `quote: "USDT" | "EUR"` — drives WS pair and number locale
+- `detailRange: "24h" | "1W" | "1M" | "1Y" | "ALL"` — current tab, drives klines fetch
+- `quote: Quote` — one of 10 fiats/stablecoins, drives WS pair, number locale, and currency suffix
 - `klinesFetchToken` — monotonically increasing; protects against stale REST responses overwriting newer ones
 
 ## File map
@@ -122,9 +130,9 @@ crypto-ticker/
     ├── main.ts           Orchestrator: bridge bootstrap, state, event handler
     ├── catalog.ts        30-coin list, Quote types, pairFor() helper
     ├── storage.ts        loadWatchlist / saveWatchlist / loadQuote / saveQuote
-    ├── format.ts         formatPrice (locale-aware), liveCells / loadingCells / noDataCells
+    ├── format.ts         formatPrice + formatPriceAxis (locale-aware), liveCells / loadingCells / noDataCells
     ├── binance.ts        subscribeTicker (WS), fetchKlines (REST)
-    ├── chart.ts          renderChartImage: canvas → PNG with axes
+    ├── chart.ts          renderChartHalves: canvas → two PNG halves (price line + dashed L-frame, no text)
     ├── settings.ts       Phone-side picker UI (currency toggle + watchlist)
     └── styles.css        Dark mobile-style theme for picker
 ```
