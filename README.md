@@ -53,7 +53,7 @@ To open DevTools in the Browser pane: right-click → Inspect, or F12.
 ## Phone-side picker (Browser pane)
 
 - **Currency toggle:** `USD` (uses Binance USDT pairs, en-US formatting) or `EUR` (uses native Binance EUR pairs, de-DE formatting)
-- **Watchlist:** up to 8 of 30 catalog coins; reorder with ↑/↓ buttons; drop with ×; add unselected with `+`
+- **Watchlist:** up to 9 of 30 catalog coins; reorder with ↑/↓ buttons; drop with ×; add unselected with `+`
 - Settings persist in `window.localStorage` under `ticker.watchlist` and `ticker.quote`
 
 ## Architecture

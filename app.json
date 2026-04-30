@@ -2,16 +2,19 @@
   "package_id": "com.eventicker.crypto",
   "edition": "202601",
   "name": "Crypto Ticker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.7",
   "entrypoint": "index.html",
+  "icon": "icon.png",
+  "description": "Live cryptocurrency prices and charts on your Even G2 lens. Streams real-time prices from Binance for up to 9 cryptocurrencies, with a hands-free detail view that includes a line chart over 24h, 1W, 1M, 1Y, or all-time. Configure your watchlist and quote currency from the companion app; navigate, drill into a coin, and exit the app entirely with the touchpad. No personal data collected; only public Binance APIs are contacted.",
+  "screenshots": ["Splash.png", "Details.png", "Companion.png"],
   "permissions": [
     {
       "name": "network",
-      "desc": "Streams live cryptocurrency prices from Binance.",
+      "desc": "Streams live crypto prices from Binance and fetches historical chart data.",
       "whitelist": [
-        "wss://stream.binance.com",
+        "wss://stream.binance.com:9443",
         "https://api.binance.com"
       ]
     }

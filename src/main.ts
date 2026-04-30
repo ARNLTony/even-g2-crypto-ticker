@@ -109,6 +109,7 @@ type Cached = { tick: Tick; ts: number };
 
 let bridge: EvenAppBridge | null = null;
 let bridgeReady = false;
+let refreshIntervalId: ReturnType<typeof setInterval> | null = null;
 let watchlist: string[] = [];
 let quote: Quote = "USDT";
 let selectedIndex = 0;
@@ -692,10 +693,46 @@ function extractEventType(event: EvenHubEvent): number | undefined {
   return undefined;
 }
 
+function pauseForBackground() {
+  if (unsubscribeWS) {
+    unsubscribeWS();
+    unsubscribeWS = null;
+  }
+  stopRefreshInterval();
+}
+
+function resumeFromBackground() {
+  resubscribe(watchlist, quote);
+  startRefreshInterval();
+}
+
+function startRefreshInterval() {
+  if (refreshIntervalId !== null) return;
+  refreshIntervalId = setInterval(scheduleRender, PERIODIC_REFRESH_MS);
+}
+
+function stopRefreshInterval() {
+  if (refreshIntervalId === null) return;
+  clearInterval(refreshIntervalId);
+  refreshIntervalId = null;
+}
+
 function handleGlassEvent(event: EvenHubEvent) {
   const t = extractEventType(event);
   if (t === undefined) return;
   console.log("[glass event]", { mode, type: t });
+
+  // Lifecycle events fire regardless of mode — pause/resume work on background.
+  switch (t) {
+    case OsEventTypeList.FOREGROUND_EXIT_EVENT:
+    case OsEventTypeList.ABNORMAL_EXIT_EVENT:
+    case OsEventTypeList.SYSTEM_EXIT_EVENT:
+      pauseForBackground();
+      return;
+    case OsEventTypeList.FOREGROUND_ENTER_EVENT:
+      resumeFromBackground();
+      return;
+  }
 
   if (mode === "list") {
     switch (t) {
@@ -886,4 +923,4 @@ quote = loadQuote();
 bootSettings();
 resubscribe(watchlist, quote);
 bootGlass().catch((err) => console.error("bridge boot failed:", err));
-setInterval(scheduleRender, PERIODIC_REFRESH_MS);
+startRefreshInterval();
