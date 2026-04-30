@@ -6,6 +6,8 @@ import {
   type EvenHubEvent,
   ImageContainerProperty,
   ImageRawDataUpdate,
+  ListContainerProperty,
+  ListItemContainerProperty,
   OsEventTypeList,
   RebuildPageContainer,
   StartUpPageCreateResult,
@@ -18,7 +20,6 @@ import {
   CATALOG,
   QUOTE_LABEL,
   QUOTE_LOCALE,
-  QUOTE_NAME,
   QUOTE_PAIR_SUFFIX,
   QUOTE_SYMBOL,
   pairFor,
@@ -42,32 +43,29 @@ const SCREEN_H = 288;
 const PADDING = 2;
 const RENDER_INTERVAL_MS = 1000;
 const PERIODIC_REFRESH_MS = 5_000;
+// List page rebuild cadence — rebuilds reset the LVGL list's selection to
+// index 0, so we keep this slow enough to feel non-jarring while still
+// surfacing fresh prices when the user is idle on the watchlist.
+const LIST_REBUILD_INTERVAL_MS = 10_000;
 const NO_DATA_THRESHOLD_MS = 10_000;
 const STALE_THRESHOLD_MS = 30_000;
 const EMPTY_MESSAGE = "No coins selected. Open the app to add some.";
 
-const COL_SYMBOL_X = 0;
-const COL_SYMBOL_W = 96;
-const COL_PRICE_X = 96;
-const COL_PRICE_W = 160;
-const COL_CHANGE_X = 256;
-const COL_CHANGE_W = SCREEN_W - COL_CHANGE_X;
-const COL_LIST_H = 256;
+// The root list page is a single ListContainer. Reviewer feedback (Even Hub
+// portal) confirmed text containers consume LVGL input events even with
+// scrollable=0/isEventCapture=0, which blocks the page-level double-tap exit
+// dialog. ListContainer is the SDK's intended navigation primitive — it
+// reports selection via List_ItemEvent.currentSelectItemIndex and properly
+// bubbles DOUBLE_CLICK_EVENT to the page so shutDownPageContainer(1) fires.
+const LIST_X = 0;
+const LIST_Y = 0;
+const LIST_W = SCREEN_W;
+// LVGL adds a few px of padding around each list item; with 9 items at the
+// firmware's natural row height, taking the full screen height makes the
+// startup-page validator return code 1 (invalid). 252 leaves enough margin.
+const LIST_H = 252;
 
-// Footer is now a text container (uses the LVGL embedded font, matches the
-// crypto rows). Single LVGL line is ~30 px tall. Container is narrower than
-// the screen and geometrically centered so the text reads centered without
-// padding the content with leading spaces (which made LVGL think the label
-// overflows and showed a scroll indicator).
-const FOOTER_W = 480;
-const FOOTER_X = Math.floor((SCREEN_W - FOOTER_W) / 2);
-const FOOTER_Y = 258;
-const FOOTER_H = 30;
-
-const CID_SYMBOL = 1;
-const CID_PRICE = 2;
-const CID_CHANGE = 3;
-const CID_LIST_FOOTER = 4;
+const CID_LIST = 1;
 const CID_EMPTY = 1;
 
 const CID_DETAIL_INFO = 1;
@@ -163,9 +161,10 @@ let klinesFetchToken = 0;
 let unsubscribeWS: (() => void) | null = null;
 const latest = new Map<string, Cached>();
 const addedAt = new Map<string, number>();
-let lastSymbolText = "";
-let lastPriceText = "";
-let lastChangeText = "";
+let lastListItems: string[] = [];
+let listRebuildPending = false;
+let listRebuildInFlight = false;
+let lastListInteractionTs = 0;
 let lastDetailInfoText = "";
 let lastYMaxText = "";
 let lastYMinText = "";
@@ -184,93 +183,49 @@ function queueImagePush(task: () => Promise<unknown>): Promise<void> {
   return next;
 }
 
-function symbolColumn(symbols: string[], idx: number): string {
-  const PAD = "　";
-  return symbols
-    .map((s, i) => (i === idx ? `「${s}」` : `${PAD}${s}${PAD}`))
-    .join("\n");
+function watchlistRow(
+  sym: string,
+  cells: Cells,
+  label: string
+): string {
+  // Composite single-line item content. LVGL's proportional embedded font
+  // means columns won't align pixel-perfectly, but consolidating into one
+  // ListContainer is the only way to keep page-level double-tap exit working.
+  // U+3000 ideographic spaces give a more visually consistent gap than ASCII.
+  return `${sym}　${cells.price}　${cells.change}　${label}`.trim();
 }
 
-function emptyContainer(): TextContainerProperty {
-  return new TextContainerProperty({
-    xPosition: 0,
-    yPosition: 0,
-    width: SCREEN_W,
-    height: SCREEN_H,
-    borderWidth: 0,
-    paddingLength: PADDING,
-    containerID: CID_EMPTY,
-    containerName: "empty",
-    isEventCapture: 1,
-    content: EMPTY_MESSAGE,
+function watchlistItemNames(symbols: string[]): string[] {
+  if (symbols.length === 0) return [EMPTY_MESSAGE];
+  const now = Date.now();
+  const locale = QUOTE_LOCALE[quote];
+  const currencySymbol = QUOTE_SYMBOL[quote];
+  const label = QUOTE_LABEL[quote];
+  return symbols.map((s) => {
+    const cells = cellsFor(s, now, locale, currencySymbol);
+    return watchlistRow(s, cells, label);
   });
 }
 
-function columnContainers(symbols: string[]): {
-  text: TextContainerProperty[];
-  image: ImageContainerProperty[];
-} {
-  const initial = symbols.map(() => loadingCells());
-  const symbolText = symbolColumn(symbols, 0);
-  const priceText = initial.map((c) => c.price).join("\n");
-  const changeText = initial.map((c) => c.change).join("\n");
-
-  const text: TextContainerProperty[] = [
-    new TextContainerProperty({
-      xPosition: COL_SYMBOL_X,
-      yPosition: 0,
-      width: COL_SYMBOL_W,
-      height: COL_LIST_H,
-      borderWidth: 0,
-      paddingLength: PADDING,
-      containerID: CID_SYMBOL,
-      containerName: "symbols",
-      isEventCapture: 1,
-      content: symbolText,
+function watchlistList(symbols: string[]): ListContainerProperty {
+  const itemName = watchlistItemNames(symbols);
+  return new ListContainerProperty({
+    xPosition: LIST_X,
+    yPosition: LIST_Y,
+    width: LIST_W,
+    height: LIST_H,
+    borderWidth: 0,
+    paddingLength: PADDING,
+    containerID: CID_LIST,
+    containerName: "watchlist",
+    isEventCapture: 1,
+    itemContainer: new ListItemContainerProperty({
+      itemCount: itemName.length,
+      itemWidth: 0,
+      isItemSelectBorderEn: 1,
+      itemName,
     }),
-    new TextContainerProperty({
-      xPosition: COL_PRICE_X,
-      yPosition: 0,
-      width: COL_PRICE_W,
-      height: COL_LIST_H,
-      borderWidth: 0,
-      paddingLength: PADDING,
-      containerID: CID_PRICE,
-      containerName: "prices",
-      isEventCapture: 0,
-      content: priceText,
-    }),
-    new TextContainerProperty({
-      xPosition: COL_CHANGE_X,
-      yPosition: 0,
-      width: COL_CHANGE_W,
-      height: COL_LIST_H,
-      borderWidth: 0,
-      paddingLength: PADDING,
-      containerID: CID_CHANGE,
-      containerName: "changes",
-      isEventCapture: 0,
-      content: changeText,
-    }),
-    new TextContainerProperty({
-      xPosition: FOOTER_X,
-      yPosition: FOOTER_Y,
-      width: FOOTER_W,
-      height: FOOTER_H,
-      borderWidth: 0,
-      paddingLength: 0,
-      containerID: CID_LIST_FOOTER,
-      containerName: "list_footer",
-      isEventCapture: 0,
-      content: footerText(),
-    }),
-  ];
-
-  return { text, image: [] };
-}
-
-function footerText(): string {
-  return `${QUOTE_LABEL[quote]} ${QUOTE_NAME[quote]}  ·  Data from Binance`;
+  });
 }
 
 function detailInfoText(
@@ -517,65 +472,21 @@ async function flushRender() {
     return;
   }
 
-  if (watchlist.length === 0) return;
-  const now = Date.now();
-  const locale = QUOTE_LOCALE[quote];
-  const currencySymbol = QUOTE_SYMBOL[quote];
-  const cells = watchlist.map((s) =>
-    cellsFor(s, now, locale, currencySymbol)
-  );
-  const priceText = cells.map((c) => c.price).join("\n");
-  const changeText = cells.map((c) => c.change).join("\n");
-
-  if (priceText !== lastPriceText) {
-    lastPriceText = priceText;
-    try {
-      await bridge.textContainerUpgrade(
-        new TextContainerUpgrade({ containerID: CID_PRICE, content: priceText })
-      );
-    } catch (err) {
-      console.error("price upgrade failed:", err);
+  // List mode: SDK 0.0.10 has no listContainerUpgrade, so we mark a rebuild
+  // as needed. The rebuild loop coalesces ticks and refreshes the page at
+  // most once per LIST_REBUILD_INTERVAL_MS — page rebuilds reset the list
+  // selection back to index 0, so we keep the cadence loose.
+  const items = watchlistItemNames(watchlist);
+  let changed = items.length !== lastListItems.length;
+  if (!changed) {
+    for (let i = 0; i < items.length; i++) {
+      if (items[i] !== lastListItems[i]) {
+        changed = true;
+        break;
+      }
     }
   }
-
-  if (changeText !== lastChangeText) {
-    lastChangeText = changeText;
-    try {
-      await bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: CID_CHANGE,
-          content: changeText,
-        })
-      );
-    } catch (err) {
-      console.error("change upgrade failed:", err);
-    }
-  }
-}
-
-async function pushSymbolColumn() {
-  if (!bridge || !bridgeReady || watchlist.length === 0) return;
-  const content = symbolColumn(watchlist, selectedIndex);
-  if (content === lastSymbolText) return;
-  lastSymbolText = content;
-  try {
-    await bridge.textContainerUpgrade(
-      new TextContainerUpgrade({ containerID: CID_SYMBOL, content })
-    );
-  } catch (err) {
-    console.error("symbol upgrade failed:", err);
-  }
-}
-
-function moveSelection(delta: number) {
-  if (watchlist.length === 0) return;
-  const next = Math.max(
-    0,
-    Math.min(watchlist.length - 1, selectedIndex + delta)
-  );
-  if (next === selectedIndex) return;
-  selectedIndex = next;
-  pushSymbolColumn();
+  if (changed) listRebuildPending = true;
 }
 
 async function pushAxisLabels(klines: Kline[]) {
@@ -838,6 +749,64 @@ function stopRefreshInterval() {
   refreshIntervalId = null;
 }
 
+let listRebuildIntervalId: ReturnType<typeof setInterval> | null = null;
+function startListRebuildLoop() {
+  if (listRebuildIntervalId !== null) return;
+  listRebuildIntervalId = setInterval(() => {
+    if (
+      !listRebuildPending ||
+      listRebuildInFlight ||
+      mode !== "list" ||
+      !bridge ||
+      !bridgeReady
+    ) {
+      return;
+    }
+    // Defer rebuild while the user is actively scrolling — rebuilding resets
+    // the LVGL cursor to index 0, which would yank them back to the top.
+    if (Date.now() - lastListInteractionTs < LIST_REBUILD_INTERVAL_MS) return;
+    listRebuildInFlight = true;
+    listRebuildPending = false;
+    rebuildListOnly()
+      .catch((err) => console.error("list rebuild failed:", err))
+      .finally(() => {
+        listRebuildInFlight = false;
+      });
+  }, LIST_REBUILD_INTERVAL_MS);
+}
+
+async function rebuildListOnly() {
+  if (!bridge || !bridgeReady || mode !== "list") return;
+  const items = watchlistItemNames(watchlist);
+  const list = new ListContainerProperty({
+    xPosition: LIST_X,
+    yPosition: LIST_Y,
+    width: LIST_W,
+    height: LIST_H,
+    borderWidth: 0,
+    paddingLength: PADDING,
+    containerID: CID_LIST,
+    containerName: "watchlist",
+    isEventCapture: 1,
+    itemContainer: new ListItemContainerProperty({
+      itemCount: items.length,
+      itemWidth: 0,
+      isItemSelectBorderEn: 1,
+      itemName: items,
+    }),
+  });
+  await bridge.rebuildPageContainer(
+    new RebuildPageContainer({
+      containerTotalNum: 1,
+      listObject: [list],
+    })
+  );
+  lastListItems = items;
+  // Selection resets to 0 on rebuild — that's the trade-off documented at
+  // LIST_REBUILD_INTERVAL_MS and why we keep the cadence loose.
+  selectedIndex = 0;
+}
+
 function handleGlassEvent(event: EvenHubEvent) {
   const t = extractEventType(event);
   if (t === undefined) return;
@@ -856,17 +825,26 @@ function handleGlassEvent(event: EvenHubEvent) {
   }
 
   if (mode === "list") {
+    // The ListContainer manages its own selection cursor; we just mirror it
+    // into selectedIndex when the firmware reports the new index, then act
+    // on click/double-click using that index.
+    if (event.listEvent?.currentSelectItemIndex !== undefined) {
+      selectedIndex = event.listEvent.currentSelectItemIndex;
+    }
+    // Any list event = active user — defer the next price-refresh rebuild so
+    // the cursor doesn't jump back to 0 mid-navigation.
+    lastListInteractionTs = Date.now();
     switch (t) {
       case OsEventTypeList.SCROLL_TOP_EVENT:
-        moveSelection(-1);
-        break;
       case OsEventTypeList.SCROLL_BOTTOM_EVENT:
-        moveSelection(1);
+        // List handles its own cursor — nothing to do beyond mirroring.
         break;
       case OsEventTypeList.CLICK_EVENT:
-        enterDetail().catch((err) =>
-          console.error("enterDetail failed:", err)
-        );
+        if (watchlist.length > 0) {
+          enterDetail().catch((err) =>
+            console.error("enterDetail failed:", err)
+          );
+        }
         break;
       case OsEventTypeList.DOUBLE_CLICK_EVENT:
         // Root-page exit per Even Hub UX guidelines:
@@ -917,8 +895,7 @@ function resubscribe(symbols: string[], q: Quote) {
       latest.delete(sym);
     }
   }
-  lastPriceText = "";
-  lastChangeText = "";
+  lastListItems = [];
 
   if (symbols.length === 0) return;
 
@@ -933,27 +910,16 @@ function resubscribe(symbols: string[], q: Quote) {
 async function rebuildGlass(symbols: string[]) {
   if (!bridge || !bridgeReady) return;
   try {
-    if (symbols.length === 0) {
-      await bridge.rebuildPageContainer(
-        new RebuildPageContainer({
-          containerTotalNum: 1,
-          textObject: [emptyContainer()],
-        })
-      );
-      selectedIndex = 0;
-      lastSymbolText = "";
-      return;
-    }
-    const { text, image } = columnContainers(symbols);
+    const list = watchlistList(symbols);
     await bridge.rebuildPageContainer(
       new RebuildPageContainer({
-        containerTotalNum: text.length + image.length,
-        textObject: text,
-        imageObject: image,
+        containerTotalNum: 1,
+        listObject: [list],
       })
     );
     selectedIndex = 0;
-    lastSymbolText = symbolColumn(symbols, 0);
+    lastListItems = watchlistItemNames(symbols);
+    listRebuildPending = false;
   } catch (err) {
     console.error("rebuildPageContainer failed:", err);
   }
@@ -998,8 +964,10 @@ async function applyState(next: SettingsState) {
   }
 }
 
-function fallbackContainer(message: string): TextContainerProperty {
-  return new TextContainerProperty({
+function fallbackList(message: string): ListContainerProperty {
+  // Use a ListContainer (not TextContainer) so the page-level double-tap
+  // exit dialog still fires from this fail-open screen.
+  return new ListContainerProperty({
     xPosition: 0,
     yPosition: 0,
     width: SCREEN_W,
@@ -1009,30 +977,24 @@ function fallbackContainer(message: string): TextContainerProperty {
     containerID: CID_EMPTY,
     containerName: "fallback",
     isEventCapture: 1,
-    content: message,
+    itemContainer: new ListItemContainerProperty({
+      itemCount: 1,
+      itemWidth: 0,
+      isItemSelectBorderEn: 0,
+      itemName: [message],
+    }),
   });
 }
 
 async function bootGlass() {
   bridge = await waitForEvenAppBridge();
-  let result: StartUpPageCreateResult;
-  if (watchlist.length === 0) {
-    result = await bridge.createStartUpPageContainer(
-      new CreateStartUpPageContainer({
-        containerTotalNum: 1,
-        textObject: [emptyContainer()],
-      })
-    );
-  } else {
-    const { text, image } = columnContainers(watchlist);
-    result = await bridge.createStartUpPageContainer(
-      new CreateStartUpPageContainer({
-        containerTotalNum: text.length + image.length,
-        textObject: text,
-        imageObject: image,
-      })
-    );
-  }
+  const list = watchlistList(watchlist);
+  const result = await bridge.createStartUpPageContainer(
+    new CreateStartUpPageContainer({
+      containerTotalNum: 1,
+      listObject: [list],
+    })
+  );
 
   if (result !== StartUpPageCreateResult.success) {
     // Hard fail-open: log the documented status code and replace the page
@@ -1048,7 +1010,7 @@ async function bootGlass() {
       await bridge.rebuildPageContainer(
         new RebuildPageContainer({
           containerTotalNum: 1,
-          textObject: [fallbackContainer(message)],
+          listObject: [fallbackList(message)],
         })
       );
     } catch (err) {
@@ -1061,11 +1023,12 @@ async function bootGlass() {
 
   bridgeReady = true;
   selectedIndex = 0;
-  lastSymbolText =
-    watchlist.length === 0 ? "" : symbolColumn(watchlist, 0);
+  lastListItems = watchlistItemNames(watchlist);
+  listRebuildPending = false;
 
   bridge.onEvenHubEvent(handleGlassEvent);
   scheduleRender();
+  startListRebuildLoop();
 }
 
 function bootSettings() {

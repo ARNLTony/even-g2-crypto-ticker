@@ -59,21 +59,20 @@ To open DevTools in the Browser pane: right-click → Inspect, or F12.
 
 ## Architecture
 
-### Container layout — list mode (4 text containers)
+### Container layout — list mode (1 ListContainer)
 
 ```
 ┌─────────────────────────────────────────────┐  y=0
-│ 「BTC」    76,200      ▼ 2.10%              │
-│  ETH       2,275      ▼ 1.97%               │
-│  ...                                        │
-├─────────────────────────────────────────────┤  y=256
-│       USD US Dollar · Data from Binance     │  footer (LVGL, centered)
-└─────────────────────────────────────────────┘  y=288
-  x=0..96    x=96..256   x=256..576
-  symbols    prices      changes               x=48..528 (centered)
+│ ╔═════════════════════════════════════════╗ │
+│ ║ BTC   76,200   ▼ 2.10%   USD            ║ │  ← selected (border)
+│ ╚═════════════════════════════════════════╝ │
+│   ETH   2,275   ▼ 1.97%   USD               │
+│   BNB   615.73  ▼ 0.98%   USD               │
+│   ...                                       │
+└─────────────────────────────────────────────┘  y=252
 ```
 
-Columns align by absolute container x-position. The cursor highlight `「 」` wraps the selected symbol in the symbol column's content, redrawn on scroll. The footer container is geometrically centered (480 px wide at x=48); fake-centering with leading spaces caused LVGL to flag overflow with a scroll indicator.
+The root page is a single `ListContainerProperty` with `isItemSelectBorderEn=1` so the firmware draws the selection border. Each item is a composite single-line string with the currency suffix appended, since LVGL's proportional embedded font means we can't pixel-align separate columns inside one item. **This is the only navigation pattern that lets `DOUBLE_CLICK_EVENT` reach the page-level `shutDownPageContainer(1)` exit dialog** — text containers consume LVGL input events even with `isEventCapture=0`/`scrollable=0` and silently block the exit. List events arrive on `event.listEvent` with `currentSelectItemIndex`, which we mirror into `selectedIndex`. Price refresh happens via a throttled `rebuildPageContainer` (no `listContainerUpgrade` exists in SDK 0.0.10) and is deferred while the user is actively scrolling.
 
 ### Container layout — detail mode (6 text + 2 image, max 8)
 
