@@ -11,7 +11,7 @@ The app runs as HTML/JS inside the Even Realities companion app's WebView. The p
 | Glasses — list | Glasses — detail | Companion app |
 |:--:|:--:|:--:|
 | ![List view](docs/Splash.png) | ![Detail view](docs/Details.png) | ![Companion picker](docs/Companion.png) |
-| 9 live coins + centered currency footer | Chart, dashed axes, LVGL Y/X labels, range tabs | Currency dropdown + watchlist editor |
+| LVGL ListContainer, selection border on the active row, currency suffix per item | Chart, dashed L-frame, LVGL Y-max/Y-min + period/now labels, range tabs | Currency dropdown + watchlist editor |
 
 ## Quick start
 
