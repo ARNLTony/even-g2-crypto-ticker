@@ -53,10 +53,12 @@ const COL_CHANGE_X = 256;
 const COL_CHANGE_W = SCREEN_W - COL_CHANGE_X;
 const COL_LIST_H = 256;
 
-const FOOTER_IMG_W = 288;
-const FOOTER_IMG_H = 28;
-const FOOTER_IMG_X = Math.floor((SCREEN_W - FOOTER_IMG_W) / 2);
-const FOOTER_IMG_Y = SCREEN_H - FOOTER_IMG_H;
+// Footer is now a text container (uses the LVGL embedded font, matches the
+// crypto rows). Single LVGL line is ~30 px tall.
+const FOOTER_X = 0;
+const FOOTER_Y = 258;
+const FOOTER_W = SCREEN_W;
+const FOOTER_H = 30;
 
 const CID_SYMBOL = 1;
 const CID_PRICE = 2;
@@ -130,7 +132,7 @@ let renderQueued = false;
 
 // Single-flight chain for image pushes. The Display guide and SDK both forbid
 // concurrent `updateImageRawData` calls; during mode transitions a stale klines
-// fetch could otherwise race a `pushListFooter` rebuild. Every image push goes
+// fetch could otherwise race the chart-half pushes. Every image push goes
 // through `queueImagePush` so they execute strictly in order.
 let imagePushChain: Promise<void> = Promise.resolve();
 function queueImagePush(task: () => Promise<unknown>): Promise<void> {
@@ -207,64 +209,28 @@ function columnContainers(symbols: string[]): {
       isEventCapture: 0,
       content: changeText,
     }),
-  ];
-
-  const image: ImageContainerProperty[] = [
-    new ImageContainerProperty({
-      xPosition: FOOTER_IMG_X,
-      yPosition: FOOTER_IMG_Y,
-      width: FOOTER_IMG_W,
-      height: FOOTER_IMG_H,
+    new TextContainerProperty({
+      xPosition: FOOTER_X,
+      yPosition: FOOTER_Y,
+      width: FOOTER_W,
+      height: FOOTER_H,
+      borderWidth: 0,
+      paddingLength: PADDING,
       containerID: CID_LIST_FOOTER,
       containerName: "list_footer",
+      isEventCapture: 0,
+      content: footerText(),
     }),
   ];
 
-  return { text, image };
+  return { text, image: [] };
 }
 
 function footerText(): string {
-  return `${QUOTE_LABEL[quote]} ${QUOTE_NAME[quote]}  ·  Data from Binance`;
-}
-
-async function renderFooterImage(text: string): Promise<Uint8Array> {
-  const canvas = document.createElement("canvas");
-  canvas.width = FOOTER_IMG_W;
-  canvas.height = FOOTER_IMG_H;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return new Uint8Array(0);
-
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, FOOTER_IMG_W, FOOTER_IMG_H);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 16px sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, FOOTER_IMG_W / 2, FOOTER_IMG_H / 2);
-
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob((b) => resolve(b), "image/png")
-  );
-  if (!blob) return new Uint8Array(0);
-  return new Uint8Array(await blob.arrayBuffer());
-}
-
-async function pushListFooter() {
-  if (!bridge || !bridgeReady || mode !== "list") return;
-  if (watchlist.length === 0) return;
-  try {
-    const bytes = await renderFooterImage(footerText());
-    await queueImagePush(() =>
-      bridge!.updateImageRawData(
-        new ImageRawDataUpdate({
-          containerID: CID_LIST_FOOTER,
-          imageData: Array.from(bytes),
-        })
-      )
-    );
-  } catch (err) {
-    console.error("pushListFooter failed:", err);
-  }
+  const text = `${QUOTE_LABEL[quote]} ${QUOTE_NAME[quote]}  ·  Data from Binance`;
+  const TARGET = 56;
+  const pad = Math.max(0, Math.floor((TARGET - text.length) / 2));
+  return " ".repeat(pad) + text;
 }
 
 function detailInfoText(
@@ -856,7 +822,6 @@ async function rebuildGlass(symbols: string[]) {
     );
     selectedIndex = 0;
     lastSymbolText = symbolColumn(symbols, 0);
-    pushListFooter();
   } catch (err) {
     console.error("rebuildPageContainer failed:", err);
   }
@@ -969,7 +934,6 @@ async function bootGlass() {
 
   bridge.onEvenHubEvent(handleGlassEvent);
   scheduleRender();
-  pushListFooter();
 }
 
 function bootSettings() {
