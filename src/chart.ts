@@ -104,7 +104,7 @@ function drawChart(
   ctx.stroke();
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = "16px sans-serif";
+  ctx.font = "18px sans-serif";
 
   ctx.textBaseline = "top";
   ctx.textAlign = "left";

@@ -8,6 +8,7 @@ import {
   ImageRawDataUpdate,
   OsEventTypeList,
   RebuildPageContainer,
+  StartUpPageCreateResult,
   TextContainerProperty,
   TextContainerUpgrade,
   waitForEvenAppBridge,
@@ -127,6 +128,17 @@ let lastDetailInfoText = "";
 let lastDetailTabsText = "";
 let renderQueued = false;
 
+// Single-flight chain for image pushes. The Display guide and SDK both forbid
+// concurrent `updateImageRawData` calls; during mode transitions a stale klines
+// fetch could otherwise race a `pushListFooter` rebuild. Every image push goes
+// through `queueImagePush` so they execute strictly in order.
+let imagePushChain: Promise<void> = Promise.resolve();
+function queueImagePush(task: () => Promise<unknown>): Promise<void> {
+  const next = imagePushChain.then(() => task().then(() => undefined));
+  imagePushChain = next.catch(() => undefined);
+  return next;
+}
+
 function symbolColumn(symbols: string[], idx: number): string {
   const PAD = "　";
   return symbols
@@ -242,11 +254,13 @@ async function pushListFooter() {
   if (watchlist.length === 0) return;
   try {
     const bytes = await renderFooterImage(footerText());
-    await bridge.updateImageRawData(
-      new ImageRawDataUpdate({
-        containerID: CID_LIST_FOOTER,
-        imageData: Array.from(bytes),
-      })
+    await queueImagePush(() =>
+      bridge!.updateImageRawData(
+        new ImageRawDataUpdate({
+          containerID: CID_LIST_FOOTER,
+          imageData: Array.from(bytes),
+        })
+      )
     );
   } catch (err) {
     console.error("pushListFooter failed:", err);
@@ -262,14 +276,19 @@ function detailInfoText(
   now: number
 ): string {
   const coin = CATALOG.find((c) => c.symbol === symbol);
-  const name = coin ? coin.name : symbol;
+  const rawName = coin ? coin.name : symbol;
+  // Truncate long coin names (e.g. "Ethereum Classic") so line 1 doesn't wrap
+  // the info container. Symbol and price stay verbatim.
+  const NAME_MAX = 12;
+  const name =
+    rawName.length > NAME_MAX ? rawName.slice(0, NAME_MAX - 1) + "…" : rawName;
   const entry = latest.get(symbol);
 
   let line1: string;
   if (entry) {
     const stale = now - entry.ts > STALE_THRESHOLD_MS;
     const price = formatPrice(entry.tick.price, locale, currencySymbol);
-    line1 = `${symbol} ${name}  ${price}${stale ? " *" : ""}`;
+    line1 = `${symbol} ${name}  ${price}${stale ? " (stale)" : ""}`;
   } else {
     line1 = `${symbol} ${name}`;
   }
@@ -516,17 +535,21 @@ async function pushChart(klines: Kline[]) {
       locale,
       QUOTE_LABEL[quote]
     );
-    await bridge.updateImageRawData(
-      new ImageRawDataUpdate({
-        containerID: CID_DETAIL_CHART_LEFT,
-        imageData: Array.from(left),
-      })
+    await queueImagePush(() =>
+      bridge!.updateImageRawData(
+        new ImageRawDataUpdate({
+          containerID: CID_DETAIL_CHART_LEFT,
+          imageData: Array.from(left),
+        })
+      )
     );
-    await bridge.updateImageRawData(
-      new ImageRawDataUpdate({
-        containerID: CID_DETAIL_CHART_RIGHT,
-        imageData: Array.from(right),
-      })
+    await queueImagePush(() =>
+      bridge!.updateImageRawData(
+        new ImageRawDataUpdate({
+          containerID: CID_DETAIL_CHART_RIGHT,
+          imageData: Array.from(right),
+        })
+      )
     );
   } catch (err) {
     console.error("pushChart failed:", err);
@@ -767,6 +790,11 @@ function handleGlassEvent(event: EvenHubEvent) {
     case OsEventTypeList.SCROLL_BOTTOM_EVENT:
       cycleRange(1).catch((err) => console.error("cycleRange failed:", err));
       break;
+    case OsEventTypeList.CLICK_EVENT:
+      // Single-tap advances to the next range, mirroring the typical G2 app
+      // convention. (Up/Down still cycle in either direction.)
+      cycleRange(1).catch((err) => console.error("cycleRange failed:", err));
+      break;
     case OsEventTypeList.DOUBLE_CLICK_EVENT:
       exitDetail().catch((err) => console.error("exitDetail failed:", err));
       break;
@@ -873,10 +901,26 @@ async function applyState(next: SettingsState) {
   }
 }
 
+function fallbackContainer(message: string): TextContainerProperty {
+  return new TextContainerProperty({
+    xPosition: 0,
+    yPosition: 0,
+    width: SCREEN_W,
+    height: SCREEN_H,
+    borderWidth: 0,
+    paddingLength: PADDING,
+    containerID: CID_EMPTY,
+    containerName: "fallback",
+    isEventCapture: 1,
+    content: message,
+  });
+}
+
 async function bootGlass() {
   bridge = await waitForEvenAppBridge();
+  let result: StartUpPageCreateResult;
   if (watchlist.length === 0) {
-    await bridge.createStartUpPageContainer(
+    result = await bridge.createStartUpPageContainer(
       new CreateStartUpPageContainer({
         containerTotalNum: 1,
         textObject: [emptyContainer()],
@@ -884,7 +928,7 @@ async function bootGlass() {
     );
   } else {
     const { text, image } = columnContainers(watchlist);
-    await bridge.createStartUpPageContainer(
+    result = await bridge.createStartUpPageContainer(
       new CreateStartUpPageContainer({
         containerTotalNum: text.length + image.length,
         textObject: text,
@@ -892,6 +936,32 @@ async function bootGlass() {
       })
     );
   }
+
+  if (result !== StartUpPageCreateResult.success) {
+    // Hard fail-open: log the documented status code and replace the page
+    // with a single-text container so the user sees something rather than a
+    // blank screen. We still mark the bridge ready so subsequent rebuilds
+    // (e.g. from settings changes) can run.
+    console.error(
+      "createStartUpPageContainer returned non-success code:",
+      result
+    );
+    const message = `App could not start (code ${result}). Try restarting.`;
+    try {
+      await bridge.rebuildPageContainer(
+        new RebuildPageContainer({
+          containerTotalNum: 1,
+          textObject: [fallbackContainer(message)],
+        })
+      );
+    } catch (err) {
+      console.error("fallback rebuildPageContainer failed:", err);
+    }
+    bridgeReady = true;
+    bridge.onEvenHubEvent(handleGlassEvent);
+    return;
+  }
+
   bridgeReady = true;
   selectedIndex = 0;
   lastSymbolText =

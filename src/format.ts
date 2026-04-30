@@ -41,7 +41,7 @@ export function liveCells(
     .padStart(5, " ");
   return {
     price: padPrice(formatPrice(price, locale, symbol)),
-    change: `${arrow} ${num}%${stale ? " *" : ""}`,
+    change: `${arrow} ${num}%${stale ? " (stale)" : ""}`,
   };
 }
 

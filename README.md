@@ -46,6 +46,7 @@ To open DevTools in the Browser pane: right-click → Inspect, or F12.
 | Action | Effect |
 |---|---|
 | `Up` / `Down` | Cycle range tabs `[1D]` → `[1W]` → `[1M]` → `[1Y]` |
+| `Click` | Advance to the next range (mirrors typical G2 single-tap convention) |
 | `Double Click` | Return to list |
 
 > Note: the simulator's `Click` button does not dispatch `CLICK_EVENT` — only `DOUBLE_CLICK_EVENT` reliably fires. The handler accepts both, but treat double-click as the primary action.
